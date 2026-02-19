@@ -46,3 +46,22 @@ def test_normalize_note_sections_normalizes_each_pyramid_group() -> None:
         "notes_middle": ("Rose", "Jasmin"),
         "notes_base": ("Vanilla", "Musk"),
     }
+
+
+def test_normalize_note_handles_german_section_labels_and_spacing() -> None:
+    assert normalize_note("Kopfnoten:   Zitrone") == "Zitrone"
+    assert normalize_note("Basisnoten -  Sandelholz") == "Sandelholz"
+
+
+def test_normalize_note_list_filters_noise_variants_and_preserves_order() -> None:
+    normalized = normalize_note_list(
+        [
+            "None",
+            "unknown",
+            "Cardamom",
+            "cardamom",
+            "Ambroxan + Musk",
+            "Null",
+        ]
+    )
+    assert normalized == ("Cardamom", "Ambroxan", "Musk")
