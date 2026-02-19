@@ -1,12 +1,13 @@
+import sys
 from datetime import datetime
 from pathlib import Path
-import sys
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.domain.models.perfume import NoteEntry, Perfume
+from app.domain.models.user_profile import UserProfile, UserProfileConstraints
 
 
 def test_perfume_schema_normalizes_and_builds_notes_all() -> None:
@@ -53,3 +54,38 @@ def test_perfume_validates_price_range() -> None:
             price_min=120.0,
             price_max=80.0,
         )
+
+
+def test_user_profile_normalizes_fields_and_constraints() -> None:
+    profile = UserProfile(
+        owned_perfume_ids=(" amber-night ", "Amber-Night", ""),
+        liked_notes=(" Vanilla ", "vanilla", "Jasmine"),
+        disliked_notes=(" Oud ", "", "oud"),
+        preferred_families=(" Warm ", "warm", "Fresh"),
+        occasion=" evening ",
+        moods=(" Cozy ", "cozy", "Energetic"),
+        strength_preference="medium",
+        constraints=UserProfileConstraints(
+            exclude_notes=(" Patchouli ", "patchouli", ""),
+            exclude_families=(" Woody ", "woody"),
+        ),
+    )
+
+    assert profile.owned_perfume_ids == ("amber-night",)
+    assert profile.liked_notes == ("Vanilla", "Jasmine")
+    assert profile.disliked_notes == ("Oud",)
+    assert profile.preferred_families == ("Warm", "Fresh")
+    assert profile.occasion == "evening"
+    assert profile.moods == ("Cozy", "Energetic")
+    assert profile.constraints.exclude_notes == ("Patchouli",)
+    assert profile.constraints.exclude_families == ("Woody",)
+
+
+def test_user_profile_rejects_invalid_strength() -> None:
+    with pytest.raises(ValueError, match="strength_preference"):
+        UserProfile(strength_preference="loud")
+
+
+def test_user_profile_rejects_overlapping_liked_and_disliked_notes() -> None:
+    with pytest.raises(ValueError, match="must not overlap"):
+        UserProfile(liked_notes=("Vanilla",), disliked_notes=(" vanilla ",))
