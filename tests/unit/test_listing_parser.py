@@ -1,5 +1,5 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -80,3 +80,38 @@ def test_parse_pagination_urls_extracts_relative_and_absolute_pages() -> None:
         "https://vicioso.example/collections/all?page=3",
         "https://vicioso.example/collections/all/page/4",
     )
+
+
+def test_parse_listing_products_uses_title_attribute_fallback() -> None:
+    html = """
+    <section>
+      <article>
+        <a href="/products/wood-night" title="Wood Night"></a>
+      </article>
+    </section>
+    """
+
+    products = parse_listing_products(html, "https://vicioso.example")
+
+    assert products == (
+        ListingProduct(
+            name="Wood Night",
+            url="https://vicioso.example/products/wood-night",
+            price_min=None,
+            price_max=None,
+        ),
+    )
+
+
+def test_parse_listing_products_skips_product_without_any_name_signal() -> None:
+    html = """
+    <section>
+      <article>
+        <a href="/products/no-name"><span>   </span></a>
+      </article>
+    </section>
+    """
+
+    products = parse_listing_products(html, "https://vicioso.example")
+
+    assert products == ()

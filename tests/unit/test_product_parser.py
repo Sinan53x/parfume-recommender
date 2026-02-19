@@ -1,9 +1,12 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.infrastructure.scraping.parsers.product_parser import ProductPageData, parse_product_page
+from app.infrastructure.scraping.parsers.product_parser import (
+    ProductPageData,
+    parse_product_page,
+)
 
 
 def test_parse_product_page_extracts_notes_description_tags_and_images() -> None:
@@ -65,7 +68,10 @@ def test_parse_product_page_uses_fallback_text_lines_and_attribute_tags() -> Non
     assert parsed.notes_middle == ("Rose",)
     assert parsed.notes_base == ("Cedar", "Musk")
     assert parsed.scent_families == ("Woody", "Fresh")
-    assert parsed.description == "This fragrance is made for elegant evening wear and long-lasting comfort."
+    assert (
+        parsed.description
+        == "This fragrance is made for elegant evening wear and long-lasting comfort."
+    )
 
 
 def test_parse_product_page_uses_jsonld_description_and_images_when_present() -> None:
@@ -95,3 +101,46 @@ def test_parse_product_page_uses_jsonld_description_and_images_when_present() ->
         "https://cdn.example.com/p2.jpg",
     )
     assert parsed.notes_top == ("Cardamom",)
+
+
+def test_parse_product_page_ignores_script_noise_in_note_extraction() -> None:
+    html = """
+    <html>
+      <head>
+        <script>
+          const fake = "Top Notes: Not A Real Note";
+        </script>
+      </head>
+      <body>
+        <div>Top Notes: Bergamot</div>
+        <div>Heart Notes: Rose</div>
+        <div>Base Notes: Musk</div>
+      </body>
+    </html>
+    """
+
+    parsed = parse_product_page(html, "https://vicioso.example")
+
+    assert parsed.notes_top == ("Bergamot",)
+    assert parsed.notes_middle == ("Rose",)
+    assert parsed.notes_base == ("Musk",)
+
+
+def test_parse_product_page_returns_empty_optional_fields_when_missing() -> None:
+    html = """
+    <html>
+      <body>
+        <div>Simple product page without structured note/tag blocks.</div>
+      </body>
+    </html>
+    """
+
+    parsed = parse_product_page(html, "https://vicioso.example")
+
+    assert parsed.notes_top == ()
+    assert parsed.notes_middle == ()
+    assert parsed.notes_base == ()
+    assert parsed.gender_tags == ()
+    assert parsed.scent_families == ()
+    assert parsed.molecule_tags == ()
+    assert parsed.image_urls == ()
