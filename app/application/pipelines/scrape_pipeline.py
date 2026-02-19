@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
+from app.config.logging import (
+    SCRAPE_PARSE_FAILED,
+    SCRAPE_RUN_END,
+    SCRAPE_RUN_START,
+    SCRAPE_URL_FAILED,
+    SCRAPE_URL_FETCHED,
+    get_logger,
+    log_event,
+)
 from app.domain.models.perfume import Perfume
 from app.infrastructure.scraping.parsers.listing_parser import (
     parse_listing_products,
@@ -28,16 +38,35 @@ class ScrapePipeline:
         perfume_repository,
         base_url: str,
         max_listing_pages: int = 50,
+        logger: logging.Logger | None = None,
     ) -> None:
         self.http_client = http_client
         self.access_guard = access_guard
         self.perfume_repository = perfume_repository
         self.base_url = base_url
         self.max_listing_pages = max_listing_pages
+        self.logger = logger or get_logger("app.application.pipelines.scrape_pipeline")
 
     def run(self, seed_listing_urls: tuple[str, ...]) -> ScrapePipelineResult:
+        log_event(
+            self.logger,
+            SCRAPE_RUN_START,
+            seed_listing_count=len(seed_listing_urls),
+            base_url=self.base_url,
+        )
         discovered, failed_listing = self._collect_listing_products(seed_listing_urls)
         scraped_count, failed_products = self._scrape_products(discovered)
+        success_rate = _compute_success_rate(scraped_count, len(discovered))
+
+        log_event(
+            self.logger,
+            SCRAPE_RUN_END,
+            discovered_product_count=len(discovered),
+            scraped_count=scraped_count,
+            failed_listing_count=len(failed_listing),
+            failed_product_count=len(failed_products),
+            success_rate=success_rate,
+        )
 
         return ScrapePipelineResult(
             discovered_product_urls=tuple(discovered.keys()),
@@ -62,20 +91,32 @@ class ScrapePipeline:
 
             try:
                 listing_html = self._fetch_html(listing_url)
-            except Exception:
+                listing_products = parse_listing_products(listing_html, self.base_url)
+                pagination_urls = parse_pagination_urls(listing_html, self.base_url)
+            except Exception as exc:
                 failed.append(listing_url)
+                log_event(
+                    self.logger,
+                    SCRAPE_PARSE_FAILED,
+                    level=logging.WARNING,
+                    stage="listing",
+                    url=listing_url,
+                    error_type=type(exc).__name__,
+                )
                 continue
 
-            for product in parse_listing_products(listing_html, self.base_url):
+            for product in listing_products:
                 products.setdefault(product.url, product)
 
-            for page_url in parse_pagination_urls(listing_html, self.base_url):
+            for page_url in pagination_urls:
                 if page_url not in visited:
                     queue.append(page_url)
 
         return products, failed
 
-    def _scrape_products(self, discovered_products: dict[str, object]) -> tuple[int, list[str]]:
+    def _scrape_products(
+        self, discovered_products: dict[str, object]
+    ) -> tuple[int, list[str]]:
         failed: list[str] = []
         scraped_count = 0
 
@@ -86,14 +127,40 @@ class ScrapePipeline:
                 perfume = _build_perfume(product_summary, product_data)
                 self.perfume_repository.upsert_perfume(perfume)
                 scraped_count += 1
-            except Exception:
+            except Exception as exc:
                 failed.append(product_url)
+                log_event(
+                    self.logger,
+                    SCRAPE_PARSE_FAILED,
+                    level=logging.WARNING,
+                    stage="product",
+                    url=product_url,
+                    error_type=type(exc).__name__,
+                )
 
         return scraped_count, failed
 
     def _fetch_html(self, url: str) -> str:
-        self.access_guard.enforce(url)
-        response = self.http_client.fetch(url)
+        try:
+            self.access_guard.enforce(url)
+            response = self.http_client.fetch(url)
+        except Exception as exc:
+            log_event(
+                self.logger,
+                SCRAPE_URL_FAILED,
+                level=logging.WARNING,
+                url=url,
+                error_type=type(exc).__name__,
+            )
+            raise
+
+        log_event(
+            self.logger,
+            SCRAPE_URL_FETCHED,
+            url=url,
+            status_code=response.status_code,
+            content_length=len(response.text),
+        )
         return response.text
 
 
@@ -129,3 +196,9 @@ def _perfume_id_from_url(url: str) -> str:
         return parts[-1]
 
     raise ValueError(f"Cannot derive perfume_id from url: {url}")
+
+
+def _compute_success_rate(scraped_count: int, discovered_count: int) -> float:
+    if discovered_count == 0:
+        return 0.0
+    return round(scraped_count / discovered_count, 4)
